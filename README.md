@@ -34,10 +34,10 @@ The command line approach might seem intimidating at first, but it means we can 
 
 First, let's get our Google Cloud environment sorted:
 
-```bash
+```pwsh
 # Set your Google Cloud project ID
-export PROJECT_ID="your-project-id"
-export REGION="europe-west2"  # Choose your preferred region
+$PROJECT_ID="sunlit-alloy-458006-q2"
+$REGION="asia-southeast1"
 
 # Log in to gcloud
 gcloud auth login
@@ -62,7 +62,7 @@ Create these two files in your working directory:
 
 **startup.sh:**
 
-```bash
+```pwsh
 #!/bin/sh
 
 # Map Cloud Run's PORT to N8N_PORT if it exists
@@ -109,12 +109,9 @@ This custom setup solves the port mismatch problem and helps with debugging. Wit
 
 Let's create a place to store our container image:
 
-```bash
+```pwsh
 # Create a repository in Artifact Registry
-gcloud artifacts repositories create n8n-repo \
-    --repository-format=docker \
-    --location=$REGION \
-    --description="Repository for n8n workflow images"
+gcloud artifacts repositories create n8n-repo --repository-format=docker --location=$REGION --description="Repository for n8n workflow images"
 
 # Configure Docker to use gcloud as a credential helper
 gcloud auth configure-docker $REGION-docker.pkg.dev
@@ -130,25 +127,15 @@ We're explicitly building for linux/amd64 because Cloud Run doesn't support ARM 
 
 Now for the database. We'll use the smallest instance type to keep costs reasonable:
 
-```bash
+```pwsh
 # Create a Cloud SQL instance (lowest cost tier)
-gcloud sql instances create n8n-db \
-    --database-version=POSTGRES_13 \
-    --tier=db-f1-micro \
-    --region=$REGION \
-    --root-password="supersecure-rootpassword" \
-    --storage-size=10GB \
-    --availability-type=ZONAL \
-    --no-backup \
-    --storage-type=HDD
+gcloud sql instances create n8n-db --database-version=POSTGRES_13 --tier=db-f1-micro --region=$REGION --root-password="supersecure-rootpassword" --storage-size=10GB --availability-type=ZONAL --no-backup --storage-type=HDD
 
 # Create a database
 gcloud sql databases create n8n --instance=n8n-db
 
 # Create a user for n8n
-gcloud sql users create n8n-user \
-    --instance=n8n-db \
-    --password="supersecure-userpassword"
+gcloud sql users create n8n-user --instance=n8n-db --password="supersecure-userpassword"
 ```
 
 The db-f1-micro tier is perfect for most personal n8n deployments. I've run hundreds of workflows on this setup without issue. And you can always upgrade later if needed.
@@ -157,18 +144,21 @@ The db-f1-micro tier is perfect for most personal n8n deployments. I've run hund
 
 Never put passwords in your deployment configuration. Let's use Secret Manager instead:
 
-```bash
+```pwsh
 # Create a secret for the database password
-echo -n "supersecure-userpassword" | \
-    gcloud secrets create n8n-db-password \
-    --data-file=- \
-    --replication-policy="automatic"
+"supersecure-userpassword" | Set-Content -NoNewline temp-secret.txt
+gcloud secrets create n8n-db-password --data-file=temp-secret.txt --replication-policy="automatic"
+# To update secret use this instead
+gcloud secrets versions add n8n-db-password --data-file=temp-secret.txt
+Remove-Item temp-secret.txt
+
 
 # Create a secret for n8n encryption key
-echo -n "your-random-encryption-key" | \
-    gcloud secrets create n8n-encryption-key \
-    --data-file=- \
-    --replication-policy="automatic"
+"your-random-encryption-key" | Set-Content -NoNewline temp-secret.txt
+gcloud secrets create n8n-encryption-key --data-file=temp-secret.txt --replication-policy="automatic"
+# To update secret use this instead
+gcloud secrets versions add n8n-encryption-key --data-file=temp-secret.txt
+Remove-Item temp-secret.txt
 ```
 
 That encryption key is particularly important - it protects all the credentials stored in your n8n instance. Make it long, random, and keep it safe. If you lose it, you'll need to reconfigure all your connected services.
@@ -177,24 +167,17 @@ That encryption key is particularly important - it protects all the credentials 
 
 Time to set up the identity your n8n instance will use:
 
-```bash
+```pwsh
 # Create a service account
-gcloud iam service-accounts create n8n-service-account \
-    --display-name="n8n Service Account"
+gcloud iam service-accounts create n8n-service-account --display-name="n8n Service Account"
 
 # Grant access to secrets
-gcloud secrets add-iam-policy-binding n8n-db-password \
-    --member="serviceAccount:n8n-service-account@$PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/secretmanager.secretAccessor"
+gcloud secrets add-iam-policy-binding n8n-db-password --member="serviceAccount:n8n-service-account@$PROJECT_ID.iam.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
 
-gcloud secrets add-iam-policy-binding n8n-encryption-key \
-    --member="serviceAccount:n8n-service-account@$PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/secretmanager.secretAccessor"
+gcloud secrets add-iam-policy-binding n8n-encryption-key --member="serviceAccount:n8n-service-account@$PROJECT_ID.iam.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
 
 # Grant Cloud SQL Client role
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:n8n-service-account@$PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/cloudsql.client"
+gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:n8n-service-account@$PROJECT_ID.iam.gserviceaccount.com" --role="roles/cloudsql.client"
 ```
 
 Following the principle of least privilege here means your n8n service can access exactly what it needs and nothing more. It's a small thing that makes a big difference to your security posture.
@@ -203,25 +186,12 @@ Following the principle of least privilege here means your n8n service can acces
 
 The moment of truth - let's deploy n8n:
 
-```bash
+```pwsh
 # Get the connection name for your Cloud SQL instance
-export SQL_CONNECTION=$(gcloud sql instances describe n8n-db --format="value(connectionName)")
+$SQL_CONNECTION = gcloud sql instances describe n8n-db --format="value(connectionName)"
 
 # Deploy to Cloud Run
-gcloud run deploy n8n \
-    --image=$REGION-docker.pkg.dev/$PROJECT_ID/n8n-repo/n8n:latest \
-    --platform=managed \
-    --region=$REGION \
-    --allow-unauthenticated \
-    --port=5678 \
-    --cpu=1 \
-    --memory=2Gi \
-    --min-instances=0 \
-    --max-instances=1 \
-    --set-env-vars="N8N_PATH=/,N8N_PORT=443,N8N_PROTOCOL=https,DB_TYPE=postgresdb,DB_POSTGRESDB_DATABASE=n8n,DB_POSTGRESDB_USER=n8n-user,DB_POSTGRESDB_HOST=/cloudsql/$SQL_CONNECTION,DB_POSTGRESDB_PORT=5432,DB_POSTGRESDB_SCHEMA=public,N8N_USER_FOLDER=/home/node/.n8n,EXECUTIONS_PROCESS=main,EXECUTIONS_MODE=regular,GENERIC_TIMEZONE=UTC,QUEUE_HEALTH_CHECK_ACTIVE=true" \
-    --set-secrets="DB_POSTGRESDB_PASSWORD=n8n-db-password:latest,N8N_ENCRYPTION_KEY=n8n-encryption-key:latest" \
-    --add-cloudsql-instances=$SQL_CONNECTION \
-    --service-account=n8n-service-account@$PROJECT_ID.iam.gserviceaccount.com
+gcloud run deploy n8n --image=$REGION-docker.pkg.dev/$PROJECT_ID/n8n-repo/n8n:latest --platform=managed --region=$REGION --allow-unauthenticated --port=5678 --cpu=1 --memory=2Gi --min-instances=0 --max-instances=1 --set-env-vars="N8N_PATH=/,N8N_PORT=443,N8N_PROTOCOL=https,DB_TYPE=postgresdb,DB_POSTGRESDB_DATABASE=n8n,DB_POSTGRESDB_USER=n8n-user,DB_POSTGRESDB_HOST=/cloudsql/$SQL_CONNECTION,DB_POSTGRESDB_PORT=5432,DB_POSTGRESDB_SCHEMA=public,N8N_USER_FOLDER=/home/node/.n8n,GENERIC_TIMEZONE=UTC,QUEUE_HEALTH_CHECK_ACTIVE=true" --set-secrets="DB_POSTGRESDB_PASSWORD=n8n-db-password:latest,N8N_ENCRYPTION_KEY=n8n-encryption-key:latest" --add-cloudsql-instances=$SQL_CONNECTION --service-account=n8n-service-account@$PROJECT_ID.iam.gserviceaccount.com
 ```
 
 After deployment, Cloud Run will provide a URL for your n8n instance. Note it down - you'll need it for the next steps.
@@ -258,14 +228,13 @@ Pay special attention to DB_TYPE. It must be "postgresdb" not "postgresql" - a q
 
 Now we need to update the deployment with environment variables that tell n8n how to properly generate URLs for OAuth callbacks:
 
-```bash
+```pwsh
 # Get your service URL (replace with your actual URL)
-export SERVICE_URL="https://n8n-YOUR_ID.REGION.run.app"
+$SERVICE_URL="https://n8n-197184456803.asia-southeast1.run.app"
 
 # Update the deployment with proper URL configuration
-gcloud run services update n8n \
-    --region=$REGION \
-    --update-env-vars="N8N_HOST=$(echo $SERVICE_URL | sed 's/https:\/\///'),N8N_WEBHOOK_URL=$SERVICE_URL,N8N_EDITOR_BASE_URL=$SERVICE_URL"
+$N8N_HOST = $SERVICE_URL -replace "^https://", ""
+gcloud run services update n8n --region=$REGION --update-env-vars="N8N_HOST=$N8N_HOST,WEBHOOK_URL=$SERVICE_URL,N8N_EDITOR_BASE_URL=$SERVICE_URL"
 ```
 
 Without these variables, OAuth would fail with utterly unhelpful "redirect_uri_mismatch" errors that make you question your life choices. Setting them correctly means n8n can construct proper callback URLs during authentication flows.
@@ -283,13 +252,13 @@ Finally, to connect n8n with Google services like Sheets:
     * Go to "APIs & Services" > "Library"
     * Search for and enable the APIs you need (e.g., "Google Sheets API", "Google Drive API")
 3. Configure OAuth Consent Screen:
-    * Go to "APIs & Services" > "OAuth consent screen
+    * Go to "APIs & Services" > "OAuth consent screen"
     * Select "External" user type (or "Internal" if using Google Workspace)
     * Fill in the required information (App name, user support email, etc.)
     * Add test users if using External type
     * For scopes, for now add the following:
         * `https://googleapis.com/auth/drive.file`
-        * `https://googleapis.com/auth/spreadsheets
+        * `https://googleapis.com/auth/spreadsheets`
 
     > Note: The OAuth consent screen configuration determines how your application appears to users during authentication. Using 'External' type is necessary for personal projects, but requires adding test users during development. The scopes requested determine what level of access n8n will have to Google services - we request only the minimum necessary for working with Google Sheets.
 
@@ -299,13 +268,13 @@ Finally, to connect n8n with Google services like Sheets:
     * Select "Web application" as the application type
     * Add your n8n URL to "Authorized JavaScript origins":
 
-        ```bash
+        ```pwsh
         https://n8n-YOUR_ID.REGION.run.app
         ```
 
     * When creating credentials in n8n, it will show you the required redirect URL. Add this to "Authorized redirect URIs":
 
-        ```bash
+        ```pwsh
         https://n8n-YOUR_ID.REGION.run.app/rest/oauth2-credential/callback
         ```
 
@@ -325,7 +294,7 @@ Updating your n8n deployment is surprisingly straightforward, and it's something
 
 ### Option 1: Rebuild and Redeploy (The Clean Way) ###
 
-```bash
+```pwsh
 # Pull the latest n8n image
 docker pull n8nio/n8n:latest
 
@@ -347,7 +316,7 @@ This process typically takes about 2-3 minutes and your n8n instance will experi
 
 If you prefer to manage version upgrades more deliberately (recommended for production use), specify the exact n8n version:
 
-```bash
+```pwsh
 # Pull a specific version
 docker pull n8nio/n8n:0.230.0  # Replace with your target version
 
@@ -383,7 +352,7 @@ I typically take a snapshot of my Cloud SQL instance before significant version 
 
 Sometimes you'll need to update environment variables rather than the container itself:
 
-```bash
+```pwsh
 gcloud run services update n8n \
     --region=$REGION \
     --update-env-vars="NEW_VARIABLE=value,UPDATED_VARIABLE=new_value"
