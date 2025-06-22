@@ -1,9 +1,6 @@
 name: Update n8n on Cloud Run
 
 on:
-  push:
-    branches:
-      - "user/yz"
   schedule:
     # At 12:00 AM, on day 1 of the month
     - cron: '0 0 1 * *'
@@ -28,20 +25,20 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           export_default_credentials: true
 
-      # - name: Configure Docker for Artifact Registry
-      #   run: |
-      #     gcloud auth configure-docker $REGION-docker.pkg.dev
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker $REGION-docker.pkg.dev
 
-      # - name: Build custom n8n image
-      #   run: |
-      #     docker build --platform linux/amd64 -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$IMAGE:latest .
+      - name: Build custom n8n image
+        run: |
+          docker build --platform linux/amd64 -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$IMAGE:latest .
 
-      # - name: Push image to Artifact Registry
-      #   run: |
-      #     docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$IMAGE:latest
+      - name: Push image to Artifact Registry
+        run: |
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$IMAGE:latest
 
-      # - name: Redeploy Cloud Run service
-      #   run: |
-      #     gcloud run services update n8n \
-      #       --image=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$IMAGE:latest \
-      #       --region=$REGION
+      - name: Redeploy Cloud Run service
+        run: |
+          gcloud run services update n8n \
+            --image=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$IMAGE:latest \
+            --region=$REGION
