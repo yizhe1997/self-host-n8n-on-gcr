@@ -1,6 +1,9 @@
 name: Update n8n on Cloud Run
 
 on:
+  push:
+    branches:
+      - "user/yz"
   schedule:
     # At 12:00 AM, on day 1 of the month
     - cron: '0 0 1 * *'
